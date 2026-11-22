@@ -34,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -54,6 +55,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.Player.Listener
@@ -104,6 +107,7 @@ class MainActivity : ComponentActivity() {
                             )
                         )
                     }) { innerPadding ->
+                    ExportingDialog(isExporting)
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -111,17 +115,6 @@ class MainActivity : ComponentActivity() {
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        OutlinedButton(
-                            onClick = {
-                                pickVideoLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-                                )
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(if (selectedVideoUri != null) "Change Video" else "Select Video")
-                        }
-
                         selectedVideoUri?.let { uri ->
                             VideoRangeSelector(
                                 modifier = Modifier.weight(1f),
@@ -165,12 +158,23 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
                         } ?: Box(
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
                             contentAlignment = Alignment.Center
                         ) {
                             Text("Pick a video to begin")
                         }
-
+                        OutlinedButton(
+                            onClick = {
+                                pickVideoLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (selectedVideoUri != null) "Change Video" else "Select Video")
+                        }
                     }
                 }
             }
@@ -318,16 +322,9 @@ fun VideoRangeSelector(
         Button(
             onClick = { onExtractSelectedRange(startMs, endMs) },
             enabled = videoDurationMs > 0L && !isExporting,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            if (isExporting) {
-                CircularProgressIndicator(
-                    modifier = Modifier.height(20.dp),
-                    strokeWidth = 2.dp
-                )
-            } else {
-                Text("Extract")
-            }
+            Text("Extract")
         }
     }
 }
@@ -434,4 +431,33 @@ fun saveVideoToGallery(
         e.printStackTrace()
         return null
     }
+}
+
+@Composable
+fun ExportingDialog(isExporting: Boolean, message: String = "Exporting..") {
+    if (!isExporting) return
+
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false
+        )
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 32.dp, vertical = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                CircularProgressIndicator()
+                Text(text = message, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+    }
+
 }

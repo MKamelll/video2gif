@@ -423,13 +423,14 @@ fun ExportingDialog(isExporting: Boolean, message: String = "Exporting..") {
     }
 }
 
+@androidx.annotation.OptIn(UnstableApi::class)
 suspend fun exportVideoRangeToGif(
     context: Context,
     sourceUri: Uri,
     outputFile: File,
     startMs: Long,
     endMs: Long,
-    fps: Int = 10,
+    fps: Int = 15,
     maxDimension: Int = 480
 ): Boolean = withContext(Dispatchers.IO) {
     val retriever = MediaMetadataRetriever()
@@ -450,15 +451,18 @@ suspend fun exportVideoRangeToGif(
         } else {
             rawWidth to rawHeight
         }
+        retriever.release()
 
         val scale = maxDimension.toFloat() / maxOf(videoWidth, videoHeight).coerceAtLeast(1)
         val targetWidth = ((videoWidth * scale).toInt() / 2) * 2
         val targetHeight = ((videoHeight * scale).toInt() / 2) * 2
         val frameDelayMs = 1000 / fps
-        val stepUs = frameDelayMs * 1000L // Us is microsecond
-        val startUs = startMs * 1000L
-        val endUs = endMs * 1000L
-
+        val mediaItem = MediaItem.fromUri(sourceUri)
+        val effects = listOf(
+            Presentation.createForWidthAndHeight(
+                targetWidth, targetHeight, Presentation.LAYOUT_SCALE_TO_FIT
+            )
+        )
         encoder.init(
             targetWidth,
             targetHeight,
@@ -466,37 +470,28 @@ suspend fun exportVideoRangeToGif(
             GifEncoder.EncodingType.ENCODING_TYPE_NORMAL_LOW_MEMORY
         )
         encodedStarted = true
-
-        var currentUs = startUs
-        while (currentUs <= endUs) {
-            val frame = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                retriever.getScaledFrameAtTime(
-                    currentUs,
-                    MediaMetadataRetriever.OPTION_CLOSEST,
-                    targetWidth,
-                    targetHeight
-                )
-            } else {
-                retriever.getFrameAtTime(currentUs, MediaMetadataRetriever.OPTION_CLOSEST)
-                    ?.let { raw ->
-                        val scaled = Bitmap.createScaledBitmap(raw, targetWidth, targetHeight, true)
-                        if (scaled != raw) raw.recycle()
-                        scaled
-                    }
-            }
-            if (frame != null) {
-                val exactFrame = if (frame.width != targetWidth || frame.height != targetHeight) {
-                    Bitmap.createScaledBitmap(frame, targetWidth, targetHeight, true).also {
-                        frame.recycle()
-                    }
-                } else {
-                    frame
+        FrameExtractor.Builder(context, mediaItem)
+            .setEffects(effects)
+            .build()
+            .use { extractor ->
+                var currentMs = startMs
+                while (currentMs <= endMs) {
+                    val frame = extractor.getFrame(currentMs).await()
+                    val bitmap = frame.bitmap
+                    val exactFrame =
+                        if (bitmap.width != targetWidth || bitmap.height != targetHeight) {
+                            Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+                                .also {
+                                    bitmap.recycle()
+                                }
+                        } else {
+                            bitmap
+                        }
+                    encoder.encodeFrame(exactFrame, frameDelayMs)
+                    exactFrame.recycle()
+                    currentMs += frameDelayMs
                 }
-                encoder.encodeFrame(exactFrame, frameDelayMs)
-                exactFrame.recycle()
             }
-            currentUs += stepUs
-        }
         true
     } catch (e: Exception) {
         e.printStackTrace()
@@ -505,6 +500,5 @@ suspend fun exportVideoRangeToGif(
         if (encodedStarted) {
             encoder.close()
         }
-        retriever.release()
     }
 }

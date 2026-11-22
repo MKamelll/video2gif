@@ -132,4 +132,5 @@ dependencies {
     // Common Kotlin-specific functionality
     implementation("androidx.media3:media3-common-ktx:$media3_version")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:1.9.0")
+    implementation("io.github.waynejo:androidndkgif:1.0.1")
 }

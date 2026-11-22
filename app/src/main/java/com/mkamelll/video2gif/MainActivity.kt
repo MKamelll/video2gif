@@ -3,6 +3,7 @@ package com.mkamelll.video2gif
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -44,6 +45,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,16 +66,14 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.Presentation
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.inspector.frame.FrameExtractor
-import androidx.media3.transformer.Composition
-import androidx.media3.transformer.ExportException
-import androidx.media3.transformer.ExportResult
-import androidx.media3.transformer.Transformer
 import androidx.media3.ui.PlayerView
 import com.mkamelll.video2gif.ui.theme.Video2gifTheme
+import com.waynejo.androidndkgif.GifEncoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.time.Duration.Companion.milliseconds
@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
                 val context = LocalContext.current
                 var selectedVideoUri by remember { mutableStateOf<Uri?>(null) }
                 var isExporting by remember { mutableStateOf(false) }
+                val coroutineScope = rememberCoroutineScope()
                 val pickVideoLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.PickVisualMedia()
                 ) { uri ->
@@ -121,40 +122,35 @@ class MainActivity : ComponentActivity() {
                                 videoUri = uri,
                                 isExporting = isExporting,
                                 onExtractSelectedRange = { startMs, endMs ->
-                                    isExporting = true
-                                    val fileName = "trimmed_${System.currentTimeMillis()}.mp4"
-                                    val tempFile = File(context.cacheDir, fileName)
-                                    trimVideoSegment(
-                                        context = context,
-                                        sourceUri = uri,
-                                        outputPath = tempFile.absolutePath,
-                                        startMs = startMs,
-                                        endMs = endMs,
-                                        onSuccess = {
-                                            val savedUri =
-                                                saveVideoToGallery(context, tempFile, fileName)
-                                            isExporting = false
-                                            val msg = if (savedUri != null) {
-                                                "Saved to Movies/Video2Gif/${fileName}"
-                                            } else {
-                                                "Failed to save to gallery"
+                                    coroutineScope.launch {
+                                        isExporting = true
+                                        val fileName = "gif_${System.currentTimeMillis()}.gif"
+                                        val tempFile = File(context.cacheDir, fileName)
+                                        val success = exportVideoRangeToGif(
+                                            context = context,
+                                            sourceUri = uri,
+                                            outputFile = tempFile,
+                                            startMs = startMs,
+                                            endMs = endMs,
+                                            fps = 15,
+                                            maxDimension = 480
+                                        )
+                                        val savedUri = if (success) {
+                                            withContext(Dispatchers.IO) {
+                                                saveGifToGallery(context, tempFile, fileName)
                                             }
-                                            Toast.makeText(
-                                                context,
-                                                msg,
-                                                Toast.LENGTH_SHORT
-                                            ).show()
-                                        },
-                                        onError = { e ->
-                                            isExporting = false
+                                        } else {
                                             tempFile.delete()
-                                            Toast.makeText(
-                                                context,
-                                                "Error: ${e.message}",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                            null
                                         }
-                                    )
+                                        isExporting = false
+                                        val msg = if (savedUri != null) {
+                                            "Saved to Pictures/Video2Gif/$fileName"
+                                        } else {
+                                            "Failed to export Gif"
+                                        }
+                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    }
                                 }
                             )
                         } ?: Box(
@@ -358,62 +354,28 @@ private suspend fun extractFilmstripThumbnails(
     bitmaps
 }
 
-@androidx.annotation.OptIn(UnstableApi::class)
-fun trimVideoSegment(
-    context: Context,
-    sourceUri: Uri,
-    outputPath: String,
-    startMs: Long,
-    endMs: Long,
-    onSuccess: () -> Unit,
-    onError: (Exception) -> Unit
-) {
-    val clippedMediaItem = MediaItem.Builder()
-        .setUri(sourceUri)
-        .setClippingConfiguration(
-            MediaItem.ClippingConfiguration.Builder()
-                .setStartPositionMs(startMs)
-                .setEndPositionMs(endMs)
-                .build()
-        ).build()
-
-    val transformer = Transformer.Builder(context)
-        .addListener(object : Transformer.Listener {
-            override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                onSuccess()
-            }
-
-            override fun onError(
-                composition: Composition,
-                exportResult: ExportResult,
-                exportException: ExportException
-            ) {
-                onError(exportException)
-            }
-        }).build()
-
-    transformer.start(clippedMediaItem, outputPath)
-}
-
-fun saveVideoToGallery(
+fun saveGifToGallery(
     context: Context,
     tempFile: File,
     displayName: String
 ): Uri? {
     val resolver = context.contentResolver
     val contentValues = ContentValues().apply {
-        put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
-        put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+        put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
+        put(MediaStore.Images.Media.MIME_TYPE, "image/gif")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/Video2Gif")
-            put(MediaStore.Video.Media.IS_PENDING, 1)
+            put(
+                MediaStore.Images.Media.RELATIVE_PATH,
+                "${Environment.DIRECTORY_PICTURES}/Video2Gif"
+            )
+            put(MediaStore.Images.Media.IS_PENDING, 1)
         }
     }
-    val videoUri =
-        resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues) ?: return null
+    val gifUri =
+        resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues) ?: return null
 
     try {
-        resolver.openOutputStream(videoUri)?.use { outputStream ->
+        resolver.openOutputStream(gifUri)?.use { outputStream ->
             tempFile.inputStream().use { inputStream ->
                 inputStream.copyTo(outputStream)
             }
@@ -421,13 +383,13 @@ fun saveVideoToGallery(
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             contentValues.clear()
-            contentValues.put(MediaStore.Video.Media.IS_PENDING, 0)
-            resolver.update(videoUri, contentValues, null, null)
+            contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
+            resolver.update(gifUri, contentValues, null, null)
         }
         tempFile.delete()
-        return videoUri
+        return gifUri
     } catch (e: Exception) {
-        resolver.delete(videoUri, null, null)
+        resolver.delete(gifUri, null, null)
         e.printStackTrace()
         return null
     }
@@ -459,5 +421,90 @@ fun ExportingDialog(isExporting: Boolean, message: String = "Exporting..") {
             }
         }
     }
+}
 
+suspend fun exportVideoRangeToGif(
+    context: Context,
+    sourceUri: Uri,
+    outputFile: File,
+    startMs: Long,
+    endMs: Long,
+    fps: Int = 10,
+    maxDimension: Int = 480
+): Boolean = withContext(Dispatchers.IO) {
+    val retriever = MediaMetadataRetriever()
+    val encoder = GifEncoder()
+    var encodedStarted = false
+
+    try {
+        retriever.setDataSource(context, sourceUri)
+        val rawWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+            ?.toIntOrNull() ?: maxDimension
+        val rawHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+            ?.toIntOrNull() ?: maxDimension
+        val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+            ?.toIntOrNull() ?: 0
+
+        val (videoWidth, videoHeight) = if (rotation == 90 || rotation == 270) {
+            rawHeight to rawWidth
+        } else {
+            rawWidth to rawHeight
+        }
+
+        val scale = maxDimension.toFloat() / maxOf(videoWidth, videoHeight).coerceAtLeast(1)
+        val targetWidth = ((videoWidth * scale).toInt() / 2) * 2
+        val targetHeight = ((videoHeight * scale).toInt() / 2) * 2
+        val frameDelayMs = 1000 / fps
+        val stepUs = frameDelayMs * 1000L // Us is microsecond
+        val startUs = startMs * 1000L
+        val endUs = endMs * 1000L
+
+        encoder.init(
+            targetWidth,
+            targetHeight,
+            outputFile.absolutePath,
+            GifEncoder.EncodingType.ENCODING_TYPE_NORMAL_LOW_MEMORY
+        )
+        encodedStarted = true
+
+        var currentUs = startUs
+        while (currentUs <= endUs) {
+            val frame = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                retriever.getScaledFrameAtTime(
+                    currentUs,
+                    MediaMetadataRetriever.OPTION_CLOSEST,
+                    targetWidth,
+                    targetHeight
+                )
+            } else {
+                retriever.getFrameAtTime(currentUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                    ?.let { raw ->
+                        val scaled = Bitmap.createScaledBitmap(raw, targetWidth, targetHeight, true)
+                        if (scaled != raw) raw.recycle()
+                        scaled
+                    }
+            }
+            if (frame != null) {
+                val exactFrame = if (frame.width != targetWidth || frame.height != targetHeight) {
+                    Bitmap.createScaledBitmap(frame, targetWidth, targetHeight, true).also {
+                        frame.recycle()
+                    }
+                } else {
+                    frame
+                }
+                encoder.encodeFrame(exactFrame, frameDelayMs)
+                exactFrame.recycle()
+            }
+            currentUs += stepUs
+        }
+        true
+    } catch (e: Exception) {
+        e.printStackTrace()
+        false
+    } finally {
+        if (encodedStarted) {
+            encoder.close()
+        }
+        retriever.release()
+    }
 }
